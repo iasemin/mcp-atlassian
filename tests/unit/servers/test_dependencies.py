@@ -12,6 +12,7 @@ from mcp_atlassian.jira import JiraConfig, JiraFetcher
 from mcp_atlassian.servers.context import MainAppContext
 from mcp_atlassian.servers.dependencies import (
     _create_user_config_for_fetcher,
+    _has_incomplete_service_header_pair,
     _resolve_bearer_auth_type,
     get_confluence_fetcher,
     get_jira_fetcher,
@@ -604,6 +605,46 @@ class TestGetJiraFetcher:
         ):
             await get_jira_fetcher(mock_context)
 
+    @patch("mcp_atlassian.servers.dependencies.get_http_request")
+    async def test_incomplete_header_pair_fails_closed_before_global_fallback(
+        self,
+        mock_get_http_request,
+        mock_context,
+        mock_request,
+        config_factory,
+    ):
+        """A partial Jira service header pair must not fall back to global auth."""
+
+        class MockState:
+            def __init__(self):
+                self.jira_fetcher = None
+                self.user_atlassian_auth_type = None
+                self.user_atlassian_email = None
+                self.atlassian_service_headers = {
+                    "X-Atlassian-Jira-Url": "https://jira.example.com"
+                }
+
+            def __getattr__(self, name):
+                if name == "user_atlassian_token":
+                    raise AttributeError(name)
+                return None
+
+        mock_request.state = MockState()
+        mock_get_http_request.return_value = mock_request
+        app_context = config_factory.create_app_context(
+            jira_config=config_factory.create_jira_config(auth_type="pat")
+        )
+        _setup_mock_context(mock_context, app_context)
+
+        with pytest.raises(
+            ValueError,
+            match=(
+                "Incomplete header-based Jira authentication: provide both "
+                "X-Atlassian-Jira-Url and X-Atlassian-Jira-Personal-Token"
+            ),
+        ):
+            await get_jira_fetcher(mock_context)
+
     @pytest.mark.parametrize("scenario_key", ["oauth", "pat"])
     @patch("mcp_atlassian.servers.dependencies.get_http_request")
     @patch("mcp_atlassian.servers.dependencies.JiraFetcher")
@@ -974,6 +1015,49 @@ class TestGetConfluenceFetcher:
 
         with pytest.raises(
             ValueError, match="Invalid header-based Confluence token or configuration"
+        ):
+            await get_confluence_fetcher(mock_context)
+
+    @patch("mcp_atlassian.servers.dependencies.get_http_request")
+    async def test_incomplete_header_pair_fails_closed_before_global_fallback(
+        self,
+        mock_get_http_request,
+        mock_context,
+        mock_request,
+        config_factory,
+    ):
+        """A partial Confluence service header pair must not fall back globally."""
+
+        class MockState:
+            def __init__(self):
+                self.confluence_fetcher = None
+                self.user_atlassian_auth_type = None
+                self.user_atlassian_email = None
+                self.atlassian_service_headers = {
+                    "X-Atlassian-Confluence-Personal-Token": (
+                        "confluence-user-pat-secret"
+                    )
+                }
+
+            def __getattr__(self, name):
+                if name == "user_atlassian_token":
+                    raise AttributeError(name)
+                return None
+
+        mock_request.state = MockState()
+        mock_get_http_request.return_value = mock_request
+        app_context = config_factory.create_app_context(
+            confluence_config=config_factory.create_confluence_config(auth_type="pat")
+        )
+        _setup_mock_context(mock_context, app_context)
+
+        with pytest.raises(
+            ValueError,
+            match=(
+                "Incomplete header-based Confluence authentication: provide both "
+                "X-Atlassian-Confluence-Url and "
+                "X-Atlassian-Confluence-Personal-Token"
+            ),
         ):
             await get_confluence_fetcher(mock_context)
 
@@ -1511,6 +1595,37 @@ class TestResolveBearerAuthType:
         )
         result = _resolve_bearer_auth_type(config, "oauth")
         assert result == "pat"
+
+
+class TestHeaderPairCompleteness:
+    """Tests for request-scoped service header completeness detection."""
+
+    def test_jira_incomplete_when_only_url_present(self):
+        headers = {"X-Atlassian-Jira-Url": "https://jira.example.com"}
+        assert _has_incomplete_service_header_pair(
+            headers,
+            "X-Atlassian-Jira-Url",
+            "X-Atlassian-Jira-Personal-Token",
+        )
+
+    def test_jira_incomplete_when_only_token_present(self):
+        headers = {"X-Atlassian-Jira-Personal-Token": "jira-user-pat-secret"}
+        assert _has_incomplete_service_header_pair(
+            headers,
+            "X-Atlassian-Jira-Url",
+            "X-Atlassian-Jira-Personal-Token",
+        )
+
+    def test_jira_complete_pair_is_not_incomplete(self):
+        headers = {
+            "X-Atlassian-Jira-Url": "https://jira.example.com",
+            "X-Atlassian-Jira-Personal-Token": "jira-user-pat-secret",
+        }
+        assert not _has_incomplete_service_header_pair(
+            headers,
+            "X-Atlassian-Jira-Url",
+            "X-Atlassian-Jira-Personal-Token",
+        )
 
 
 class TestSsrfProtection:
