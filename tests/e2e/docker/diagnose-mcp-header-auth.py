@@ -8,6 +8,7 @@ import asyncio
 import os
 import sys
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from mcp import ClientSession
@@ -38,6 +39,12 @@ def _mask(value: str | None) -> str:
     if len(value) <= 8:
         return "***"
     return f"{value[:4]}...{value[-4:]}"
+
+
+def _health_base_url(mcp_url: str) -> str:
+    """Return the HTTP origin that serves /healthz for an MCP endpoint URL."""
+    parts = urlsplit(mcp_url)
+    return urlunsplit((parts.scheme, parts.netloc, "", "", ""))
 
 
 async def _check_health(base_url: str) -> None:
@@ -75,7 +82,7 @@ async def _run(args: argparse.Namespace) -> int:
         )
         return 2
 
-    base_url = args.mcp_url.rsplit("/mcp", 1)[0]
+    base_url = _health_base_url(args.mcp_url)
     await _check_health(base_url)
 
     async with streamablehttp_client(args.mcp_url, headers=headers) as (

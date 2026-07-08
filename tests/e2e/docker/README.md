@@ -59,6 +59,15 @@ the script supplies those values through headers.
 uv run mcp-atlassian --transport streamable-http --port 9000 -vv
 ```
 
+If the MCP server runs in the same Docker network as Jira/Confluence and the
+diagnostic passes Docker DNS names such as `http://jira:8080`, allowlist those
+hostnames for SSRF validation:
+
+```bash
+MCP_ALLOWED_URL_DOMAINS=jira,confluence \
+  uv run mcp-atlassian --transport streamable-http --port 9000 -vv
+```
+
 Run the diagnostic client:
 
 ```bash
@@ -70,6 +79,16 @@ uv run python diagnose-mcp-header-auth.py \
   --mcp-url http://localhost:9000/mcp \
   --jira-url "${JIRA_BASE_URL:-http://localhost:8080}" \
   --confluence-url "${CONFLUENCE_BASE_URL:-http://localhost:8090}"
+```
+
+For a fully containerized run, use URLs that are reachable from the MCP
+container, not necessarily from the host:
+
+```bash
+uv run python diagnose-mcp-header-auth.py \
+  --mcp-url http://localhost:9000/mcp \
+  --jira-url http://jira:8080 \
+  --confluence-url http://confluence:8090
 ```
 
 The diagnostic reads `JIRA_PERSONAL_TOKEN` and
@@ -137,7 +156,7 @@ docker compose down -v
 | License expired | See [License (timebomb)](#license-timebomb) — Jira: re-paste in admin; Confluence: `down -v` re-setup or `ATL_FORCE_CFG_UPDATE=true docker compose up -d confluence` (a plain restart does **not** refresh it) |
 | MCP `/healthz` fails | Ensure `uv run mcp-atlassian --transport streamable-http --port 9000 -vv` is running from the repository root |
 | Jira/Confluence tools are not visible | Confirm the diagnostic command passes both URL and PAT headers for that service |
-| Invalid URL error | The MCP server rejected the supplied URL with SSRF validation; use a routable Jira/Confluence base URL |
+| Invalid URL error | The MCP server rejected the supplied URL with SSRF validation; use a routable Jira/Confluence base URL, or set `MCP_ALLOWED_URL_DOMAINS` for trusted Docker DNS hostnames |
 | Tool call returns 401/403 | The supplied PAT is invalid, expired, or lacks permission for that Jira/Confluence action |
 
 ## Environment variables
