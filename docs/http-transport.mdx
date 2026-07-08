@@ -106,23 +106,43 @@ Both transport types support per-request authentication where each user provides
     }
     ```
   </Tab>
-  <Tab title="Server/DC (PAT)">
+  <Tab title="Server/DC (PAT headers)">
     ```json
     {
       "mcpServers": {
         "mcp-atlassian-service": {
           "url": "http://localhost:9000/mcp",
           "headers": {
-            "Authorization": "Token <USER_PERSONAL_ACCESS_TOKEN>"
+            "X-Atlassian-Jira-Url": "https://jira.company.com",
+            "X-Atlassian-Jira-Personal-Token": "<USER_JIRA_PAT>",
+            "X-Atlassian-Confluence-Url": "https://confluence.company.com",
+            "X-Atlassian-Confluence-Personal-Token": "<USER_CONFLUENCE_PAT>"
           }
         }
       }
     }
     ```
+
+    Send only the Jira headers when the user should access Jira only, only the
+    Confluence headers when the user should access Confluence only, or all four
+    headers when both services should be available. The MCP server does not store
+    these PATs; Jira and Confluence enforce permissions for the supplied user.
   </Tab>
 </Tabs>
 
 ### Server Setup for Multi-User
+
+For Server/Data Center PAT multi-user mode, the HTTP server can be started
+without `JIRA_PERSONAL_TOKEN` or `CONFLUENCE_PERSONAL_TOKEN`. Each request must
+provide a complete service header pair:
+
+```bash
+uvx mcp-atlassian --transport streamable-http --port 9000 -vv
+```
+
+The server treats `X-Atlassian-Jira-Url` + `X-Atlassian-Jira-Personal-Token`
+and `X-Atlassian-Confluence-Url` +
+`X-Atlassian-Confluence-Personal-Token` as request-scoped credentials.
 
 <Steps>
   <Step title="Run OAuth Setup (if using OAuth)">
@@ -195,8 +215,9 @@ For multi-tenant applications where each user connects to their own Atlassian cl
    ```
 
 2. Users provide authentication via HTTP headers:
-   - `Authorization: Bearer <user_oauth_token>`
-   - `X-Atlassian-Cloud-Id: <user_cloud_id>`
+   - Cloud OAuth: `Authorization: Bearer <user_oauth_token>` plus `X-Atlassian-Cloud-Id: <user_cloud_id>`
+   - Server/Data Center Jira PAT: `X-Atlassian-Jira-Url` plus `X-Atlassian-Jira-Personal-Token`
+   - Server/Data Center Confluence PAT: `X-Atlassian-Confluence-Url` plus `X-Atlassian-Confluence-Personal-Token`
 
 ### Python Example
 
