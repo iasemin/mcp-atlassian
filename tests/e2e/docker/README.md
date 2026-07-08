@@ -46,6 +46,11 @@ bash setup-test-data.sh
 bash create-pat.sh
 ```
 
+`create-pat.sh` prints `export` commands for `JIRA_PERSONAL_TOKEN` and
+`CONFLUENCE_PERSONAL_TOKEN`; it does not write them to `.env`. Copy and run the
+printed exports in your current shell, or save them in a local secrets file and
+source that file before running the diagnostic.
+
 Start the MCP HTTP server from the repository root in a separate terminal. Do
 not set `JIRA_PERSONAL_TOKEN` or `CONFLUENCE_PERSONAL_TOKEN` for this diagnostic;
 the script supplies those values through headers.
@@ -59,13 +64,17 @@ Run the diagnostic client:
 ```bash
 cd tests/e2e/docker
 source .env
+# Paste/run the export commands printed by create-pat.sh here,
+# or source your local secrets file that contains them.
 uv run python diagnose-mcp-header-auth.py \
   --mcp-url http://localhost:9000/mcp \
   --jira-url "${JIRA_BASE_URL:-http://localhost:8080}" \
-  --jira-pat "$JIRA_PERSONAL_TOKEN" \
-  --confluence-url "${CONFLUENCE_BASE_URL:-http://localhost:8090}" \
-  --confluence-pat "$CONFLUENCE_PERSONAL_TOKEN"
+  --confluence-url "${CONFLUENCE_BASE_URL:-http://localhost:8090}"
 ```
+
+The diagnostic reads `JIRA_PERSONAL_TOKEN` and
+`CONFLUENCE_PERSONAL_TOKEN` from the environment. Avoid passing PATs as
+command-line arguments because they can be exposed through process listings.
 
 The report shows health check status, visible Jira/Confluence tools, and the
 result of low-risk read-only calls. If a user's PAT has restricted permissions,
