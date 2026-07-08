@@ -197,6 +197,17 @@ def _get_global_config(
     return config
 
 
+def _has_incomplete_service_header_pair(
+    service_headers: dict[str, str],
+    url_header: str,
+    token_header: str,
+) -> bool:
+    """Return True when exactly one service URL/PAT header is present."""
+    has_url = bool(service_headers.get(url_header))
+    has_token = bool(service_headers.get(token_header))
+    return has_url != has_token
+
+
 def _create_and_validate(
     request: Request,
     spec: _ServiceSpec,
@@ -531,6 +542,14 @@ async def _get_fetcher(ctx: Context, spec: _ServiceSpec) -> Any:
         service_headers = getattr(request.state, "atlassian_service_headers", {})
         url_header_val = service_headers.get(spec.url_header)
         token_header_val = service_headers.get(spec.token_header)
+
+        if _has_incomplete_service_header_pair(
+            service_headers, spec.url_header, spec.token_header
+        ):
+            raise ValueError(
+                f"Incomplete header-based {spec.name} authentication: provide both "
+                f"{spec.url_header} and {spec.token_header}."
+            )
 
         # --- Branch 1: header-based PAT ---
         if (
