@@ -365,6 +365,28 @@ token_validation_cache: TTLCache[
 ] = TTLCache(maxsize=100, ttl=300)
 
 
+def _has_complete_service_header_pair(
+    service_headers: dict[str, str],
+    url_header: str,
+    token_header: str,
+) -> bool:
+    """Return True when a service has both URL and PAT headers."""
+    return bool(service_headers.get(url_header) and service_headers.get(token_header))
+
+
+def _has_any_complete_service_header_pair(service_headers: dict[str, str]) -> bool:
+    """Return True when Jira or Confluence has a complete URL/PAT header pair."""
+    return _has_complete_service_header_pair(
+        service_headers,
+        "X-Atlassian-Jira-Url",
+        "X-Atlassian-Jira-Personal-Token",
+    ) or _has_complete_service_header_pair(
+        service_headers,
+        "X-Atlassian-Confluence-Url",
+        "X-Atlassian-Confluence-Personal-Token",
+    )
+
+
 class UserTokenMiddleware:
     """ASGI-compliant middleware to extract Atlassian user tokens/credentials.
 
@@ -578,21 +600,25 @@ class UserTokenMiddleware:
                     f"UserTokenMiddleware: Extracted cloudId: {cloud_id_str.strip()}"
                 )
 
-            # Process Authorization header
+            complete_service_headers = _has_any_complete_service_header_pair(
+                service_headers
+            )
+            if complete_service_headers:
+                scope["state"]["user_atlassian_auth_type"] = "pat"
+                scope["state"]["user_atlassian_email"] = None
+                logger.debug(
+                    "UserTokenMiddleware: Header-based authentication detected. "
+                    "Setting PAT auth type."
+                )
+                return
+
+            # Process Authorization header only when no complete Atlassian
+            # service header pair is present. This keeps generic gateway/MCP
+            # Authorization from overriding per-request Atlassian PAT headers.
             if auth_header_str:
                 self._parse_auth_header(auth_header_str, scope)
             else:
                 logger.debug("UserTokenMiddleware: No Authorization header provided")
-                # If service headers are present without Authorization header, set PAT auth type
-                if service_headers and (
-                    (jira_token_str and jira_url_str)
-                    or (confluence_token_str and confluence_url_str)
-                ):
-                    scope["state"]["user_atlassian_auth_type"] = "pat"
-                    scope["state"]["user_atlassian_email"] = None
-                    logger.debug(
-                        "UserTokenMiddleware: Header-based authentication detected. Setting PAT auth type."
-                    )
 
         except Exception as e:
             logger.error(f"Error processing authentication headers: {e}", exc_info=True)
