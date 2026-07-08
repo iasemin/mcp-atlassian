@@ -395,9 +395,10 @@ class TestUserTokenMiddleware:
         state = downstream_scope["state"]
         assert state["user_atlassian_auth_type"] == "pat"
         assert "user_atlassian_token" not in state
-        assert state["atlassian_service_headers"][
-            "X-Atlassian-Jira-Personal-Token"
-        ] == "jira-user-pat-secret"
+        assert (
+            state["atlassian_service_headers"]["X-Atlassian-Jira-Personal-Token"]
+            == "jira-user-pat-secret"
+        )
 
     @pytest.mark.anyio
     async def test_incomplete_service_headers_do_not_set_pat_context(

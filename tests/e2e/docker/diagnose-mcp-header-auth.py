@@ -128,10 +128,11 @@ def _parse_args() -> argparse.Namespace:
         "--mcp-url", default=_env("MCP_URL", "http://localhost:9000/mcp")
     )
     parser.add_argument("--jira-url", default=_env("JIRA_BASE_URL"))
-    parser.add_argument("--jira-pat", default=_env("JIRA_PERSONAL_TOKEN"))
     parser.add_argument("--confluence-url", default=_env("CONFLUENCE_BASE_URL"))
-    parser.add_argument("--confluence-pat", default=_env("CONFLUENCE_PERSONAL_TOKEN"))
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.jira_pat = _env("JIRA_PERSONAL_TOKEN")
+    args.confluence_pat = _env("CONFLUENCE_PERSONAL_TOKEN")
+    return args
 
 
 def main() -> int:
