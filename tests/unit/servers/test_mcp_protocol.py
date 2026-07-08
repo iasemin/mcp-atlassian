@@ -90,6 +90,111 @@ class TestMCPProtocolIntegration:
         # Mount sub-servers (they're already mounted in the actual server)
         return server
 
+    def _make_tool(self, name: str, tags: set[str]) -> FastMCPTool:
+        tool = MagicMock(spec=FastMCPTool)
+        tool.tags = tags
+        tool.to_mcp_tool.return_value = MCPTool(
+            name=name,
+            description=f"Tool {name}",
+            inputSchema={"type": "object", "properties": {}},
+        )
+        return tool
+
+    def _attach_request_context(
+        self,
+        atlassian_mcp_server: AtlassianMCP,
+        service_headers: dict[str, str],
+    ) -> None:
+        app_context = MainAppContext(
+            full_jira_config=None,
+            full_confluence_config=None,
+            read_only=False,
+            enabled_tools=None,
+            enabled_toolsets=None,
+        )
+        request = MagicMock()
+        request.state.atlassian_service_headers = service_headers
+        request_context = MagicMock()
+        request_context.lifespan_context = {"app_lifespan_context": app_context}
+        request_context.request = request
+        atlassian_mcp_server._mcp_server = MagicMock()
+        atlassian_mcp_server._mcp_server.request_context = request_context
+
+    async def test_tool_listing_uses_jira_header_pair_without_global_config(
+        self, atlassian_mcp_server
+    ):
+        """Jira tools are visible from complete per-request Jira URL/PAT headers."""
+        self._attach_request_context(
+            atlassian_mcp_server,
+            {
+                "X-Atlassian-Jira-Url": "https://jira.example.com",
+                "X-Atlassian-Jira-Personal-Token": "jira-user-pat-secret",
+            },
+        )
+
+        async def mock_get_tools():
+            return {
+                "jira_search": self._make_tool("jira_search", {"jira", "read"}),
+                "confluence_search": self._make_tool(
+                    "confluence_search", {"confluence", "read"}
+                ),
+            }
+
+        atlassian_mcp_server.get_tools = mock_get_tools
+
+        tools = await atlassian_mcp_server._list_tools_mcp()
+
+        assert [tool.name for tool in tools] == ["jira_search"]
+
+    async def test_tool_listing_uses_confluence_header_pair_without_global_config(
+        self, atlassian_mcp_server
+    ):
+        """Confluence tools are visible from complete per-request URL/PAT headers."""
+        self._attach_request_context(
+            atlassian_mcp_server,
+            {
+                "X-Atlassian-Confluence-Url": "https://confluence.example.com",
+                "X-Atlassian-Confluence-Personal-Token": "confluence-user-pat-secret",
+            },
+        )
+
+        async def mock_get_tools():
+            return {
+                "jira_search": self._make_tool("jira_search", {"jira", "read"}),
+                "confluence_search": self._make_tool(
+                    "confluence_search", {"confluence", "read"}
+                ),
+            }
+
+        atlassian_mcp_server.get_tools = mock_get_tools
+
+        tools = await atlassian_mcp_server._list_tools_mcp()
+
+        assert [tool.name for tool in tools] == ["confluence_search"]
+
+    async def test_tool_listing_does_not_enable_service_from_incomplete_headers(
+        self, atlassian_mcp_server
+    ):
+        """A lone service URL header must not expose that service's tools."""
+        self._attach_request_context(
+            atlassian_mcp_server,
+            {"X-Atlassian-Jira-Url": "https://jira.example.com"},
+        )
+
+        async def mock_get_tools():
+            return {
+                "jira_search": self._make_tool("jira_search", {"jira", "read"}),
+                "confluence_search": self._make_tool(
+                    "confluence_search", {"confluence", "read"}
+                ),
+            }
+
+        atlassian_mcp_server.get_tools = mock_get_tools
+
+        tools = await atlassian_mcp_server._list_tools_mcp()
+
+        assert tools == []
+
     async def test_tool_discovery_with_full_configuration(
         self, atlassian_mcp_server, mock_jira_config, mock_confluence_config
     ):
