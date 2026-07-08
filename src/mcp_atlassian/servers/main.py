@@ -240,6 +240,7 @@ class AtlassianMCP(FastMCP[MainAppContext]):
             else None
         )
 
+        service_headers: dict[str, str] = {}
         header_based_services = {"jira": False, "confluence": False}
         request = getattr(req_context, "request", None)
         if request is not None:
@@ -249,6 +250,16 @@ class AtlassianMCP(FastMCP[MainAppContext]):
                 logger.debug(
                     f"Header-based service availability: {header_based_services}"
                 )
+        jira_header_incomplete = _has_incomplete_service_header_pair(
+            service_headers,
+            "X-Atlassian-Jira-Url",
+            "X-Atlassian-Jira-Personal-Token",
+        )
+        confluence_header_incomplete = _has_incomplete_service_header_pair(
+            service_headers,
+            "X-Atlassian-Confluence-Url",
+            "X-Atlassian-Confluence-Personal-Token",
+        )
 
         logger.debug(
             f"_list_tools_mcp: read_only={read_only}, enabled_tools_filter={enabled_tools_filter}, header_services={header_based_services}"
@@ -284,12 +295,19 @@ class AtlassianMCP(FastMCP[MainAppContext]):
             is_confluence_tool = "confluence" in tool_tags
             service_configured_and_available = True
             if app_lifespan_state:
-                jira_available = (
-                    app_lifespan_state.full_jira_config is not None
-                ) or header_based_services.get("jira", False)
-                confluence_available = (
-                    app_lifespan_state.full_confluence_config is not None
-                ) or header_based_services.get("confluence", False)
+                if jira_header_incomplete:
+                    jira_available = False
+                else:
+                    jira_available = (
+                        app_lifespan_state.full_jira_config is not None
+                    ) or header_based_services.get("jira", False)
+
+                if confluence_header_incomplete:
+                    confluence_available = False
+                else:
+                    confluence_available = (
+                        app_lifespan_state.full_confluence_config is not None
+                    ) or header_based_services.get("confluence", False)
 
                 if is_jira_tool and not jira_available:
                     logger.debug(
@@ -372,6 +390,17 @@ def _has_complete_service_header_pair(
 ) -> bool:
     """Return True when a service has both URL and PAT headers."""
     return bool(service_headers.get(url_header) and service_headers.get(token_header))
+
+
+def _has_incomplete_service_header_pair(
+    service_headers: dict[str, str],
+    url_header: str,
+    token_header: str,
+) -> bool:
+    """Return True when exactly one service URL/PAT header is present."""
+    has_url = bool(service_headers.get(url_header))
+    has_token = bool(service_headers.get(token_header))
+    return has_url != has_token
 
 
 def _has_any_complete_service_header_pair(service_headers: dict[str, str]) -> bool:

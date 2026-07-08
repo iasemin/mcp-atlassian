@@ -104,10 +104,12 @@ class TestMCPProtocolIntegration:
         self,
         atlassian_mcp_server: AtlassianMCP,
         service_headers: dict[str, str],
+        jira_config: JiraConfig | None = None,
+        confluence_config: ConfluenceConfig | None = None,
     ) -> None:
         app_context = MainAppContext(
-            full_jira_config=None,
-            full_confluence_config=None,
+            full_jira_config=jira_config,
+            full_confluence_config=confluence_config,
             read_only=False,
             enabled_tools=None,
             enabled_toolsets=None,
@@ -194,6 +196,56 @@ class TestMCPProtocolIntegration:
         tools = await atlassian_mcp_server._list_tools_mcp()
 
         assert tools == []
+
+    async def test_hides_jira_for_incomplete_headers_with_global_config(
+        self, atlassian_mcp_server, mock_jira_config, mock_confluence_config
+    ):
+        """A lone Jira header must override global Jira config and hide Jira tools."""
+        self._attach_request_context(
+            atlassian_mcp_server,
+            {"X-Atlassian-Jira-Url": "https://jira.example.com"},
+            jira_config=mock_jira_config,
+            confluence_config=mock_confluence_config,
+        )
+
+        async def mock_get_tools():
+            return {
+                "jira_search": self._make_tool("jira_search", {"jira", "read"}),
+                "confluence_search": self._make_tool(
+                    "confluence_search", {"confluence", "read"}
+                ),
+            }
+
+        atlassian_mcp_server.get_tools = mock_get_tools
+
+        tools = await atlassian_mcp_server._list_tools_mcp()
+
+        assert [tool.name for tool in tools] == ["confluence_search"]
+
+    async def test_hides_confluence_for_incomplete_headers_with_global_config(
+        self, atlassian_mcp_server, mock_jira_config, mock_confluence_config
+    ):
+        """A lone Confluence header must override global config and hide its tools."""
+        self._attach_request_context(
+            atlassian_mcp_server,
+            {"X-Atlassian-Confluence-Url": "https://confluence.example.com"},
+            jira_config=mock_jira_config,
+            confluence_config=mock_confluence_config,
+        )
+
+        async def mock_get_tools():
+            return {
+                "jira_search": self._make_tool("jira_search", {"jira", "read"}),
+                "confluence_search": self._make_tool(
+                    "confluence_search", {"confluence", "read"}
+                ),
+            }
+
+        atlassian_mcp_server.get_tools = mock_get_tools
+
+        tools = await atlassian_mcp_server._list_tools_mcp()
+
+        assert [tool.name for tool in tools] == ["jira_search"]
 
     async def test_tool_discovery_with_full_configuration(
         self, atlassian_mcp_server, mock_jira_config, mock_confluence_config
