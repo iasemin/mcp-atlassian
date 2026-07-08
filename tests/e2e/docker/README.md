@@ -29,6 +29,48 @@ bash setup-test-data.sh
 bash create-pat.sh
 ```
 
+## Server-mode PAT header diagnostic
+
+Use this workflow to verify that one HTTP `mcp-atlassian` server can proxy
+requests for different users by receiving Atlassian URL/PAT headers on each
+MCP request.
+
+Start Jira and Confluence first:
+
+```bash
+cd tests/e2e/docker
+cp .env.example .env
+docker compose up -d
+bash healthcheck.sh
+bash setup-test-data.sh
+bash create-pat.sh
+```
+
+Start the MCP HTTP server from the repository root in a separate terminal. Do
+not set `JIRA_PERSONAL_TOKEN` or `CONFLUENCE_PERSONAL_TOKEN` for this diagnostic;
+the script supplies those values through headers.
+
+```bash
+uv run mcp-atlassian --transport streamable-http --port 9000 -vv
+```
+
+Run the diagnostic client:
+
+```bash
+cd tests/e2e/docker
+source .env
+uv run python diagnose-mcp-header-auth.py \
+  --mcp-url http://localhost:9000/mcp \
+  --jira-url "${JIRA_BASE_URL:-http://localhost:8080}" \
+  --jira-pat "$JIRA_PERSONAL_TOKEN" \
+  --confluence-url "${CONFLUENCE_BASE_URL:-http://localhost:8090}" \
+  --confluence-pat "$CONFLUENCE_PERSONAL_TOKEN"
+```
+
+The report shows health check status, visible Jira/Confluence tools, and the
+result of low-risk read-only calls. If a user's PAT has restricted permissions,
+Jira or Confluence should return permission errors under that user's identity.
+
 ## Setup wizard (manual, one-time)
 
 Both Jira and Confluence require completing a setup wizard on first launch.
@@ -84,6 +126,10 @@ docker compose down -v
 | DB connection error | Ensure the DB container is healthy: `docker compose ps` |
 | Setup wizard reappears | Data volumes were removed — run `docker compose down` (without `-v`) to preserve them |
 | License expired | See [License (timebomb)](#license-timebomb) — Jira: re-paste in admin; Confluence: `down -v` re-setup or `ATL_FORCE_CFG_UPDATE=true docker compose up -d confluence` (a plain restart does **not** refresh it) |
+| MCP `/healthz` fails | Ensure `uv run mcp-atlassian --transport streamable-http --port 9000 -vv` is running from the repository root |
+| Jira/Confluence tools are not visible | Confirm the diagnostic command passes both URL and PAT headers for that service |
+| Invalid URL error | The MCP server rejected the supplied URL with SSRF validation; use a routable Jira/Confluence base URL |
+| Tool call returns 401/403 | The supplied PAT is invalid, expired, or lacks permission for that Jira/Confluence action |
 
 ## Environment variables
 
