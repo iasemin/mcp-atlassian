@@ -77,9 +77,13 @@ source .env
 # or source your local secrets file that contains them.
 uv run python diagnose-mcp-header-auth.py \
   --mcp-url http://localhost:9000/mcp \
-  --jira-url "${JIRA_BASE_URL:-http://localhost:8080}" \
-  --confluence-url "${CONFLUENCE_BASE_URL:-http://localhost:8090}"
+  --jira-url "$JIRA_BASE_URL" \
+  --confluence-url "$CONFLUENCE_BASE_URL"
 ```
+
+The `--jira-url` and `--confluence-url` values are copied into
+`X-Atlassian-Jira-Url` and `X-Atlassian-Confluence-Url` headers by the
+diagnostic client. They are not MCP server defaults.
 
 For a fully containerized run, use URLs that are reachable from the MCP
 container, not necessarily from the host:

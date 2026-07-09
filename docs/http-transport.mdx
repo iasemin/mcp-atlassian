@@ -113,9 +113,9 @@ Both transport types support per-request authentication where each user provides
         "mcp-atlassian-service": {
           "url": "http://localhost:9000/mcp",
           "headers": {
-            "X-Atlassian-Jira-Url": "https://jira.company.com",
+            "X-Atlassian-Jira-Url": "<USER_JIRA_BASE_URL>",
             "X-Atlassian-Jira-Personal-Token": "<USER_JIRA_PAT>",
-            "X-Atlassian-Confluence-Url": "https://confluence.company.com",
+            "X-Atlassian-Confluence-Url": "<USER_CONFLUENCE_BASE_URL>",
             "X-Atlassian-Confluence-Personal-Token": "<USER_CONFLUENCE_PAT>"
           }
         }
@@ -125,7 +125,9 @@ Both transport types support per-request authentication where each user provides
 
     Send only the Jira headers when the user should access Jira only, only the
     Confluence headers when the user should access Confluence only, or all four
-    headers when both services should be available. The MCP server does not store
+    headers when both services should be available. The Atlassian URL headers are
+    request-scoped too: the server uses the URL supplied in the same request as
+    the PAT, not a shared Jira/Confluence default. The MCP server does not store
     these PATs; Jira and Confluence enforce permissions for the supplied user.
   </Tab>
 </Tabs>
@@ -133,8 +135,9 @@ Both transport types support per-request authentication where each user provides
 ### Server Setup for Multi-User
 
 For Server/Data Center PAT multi-user mode, the HTTP server can be started
-without `JIRA_PERSONAL_TOKEN` or `CONFLUENCE_PERSONAL_TOKEN`. Each request must
-provide a complete service header pair:
+without `JIRA_URL`, `CONFLUENCE_URL`, `JIRA_PERSONAL_TOKEN`, or
+`CONFLUENCE_PERSONAL_TOKEN`. Each request must provide a complete service header
+pair:
 
 ```bash
 uvx mcp-atlassian --transport streamable-http --port 9000 -vv
