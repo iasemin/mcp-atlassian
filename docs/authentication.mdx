@@ -158,7 +158,8 @@ For multi-tenant applications where users provide their own OAuth tokens:
    ```
 
 2. Users provide authentication via HTTP headers:
-   - `Authorization: Bearer <user_oauth_token>`
-   - `X-Atlassian-Cloud-Id: <user_cloud_id>`
+   - Cloud OAuth: `Authorization: Bearer <user_oauth_token>` plus `X-Atlassian-Cloud-Id: <user_cloud_id>`
 
 See [HTTP Transport](/docs/http-transport) for more details on multi-user authentication.
+For Server/Data Center PAT header auth, see
+[HTTP Transport](/docs/http-transport#multi-user-authentication).

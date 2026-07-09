@@ -29,6 +29,80 @@ bash setup-test-data.sh
 bash create-pat.sh
 ```
 
+## Server-mode PAT header diagnostic
+
+Use this workflow to verify that one HTTP `mcp-atlassian` server can proxy
+requests for different users by receiving Atlassian URL/PAT headers on each
+MCP request.
+
+Start Jira and Confluence first:
+
+```bash
+cd tests/e2e/docker
+cp .env.example .env
+docker compose up -d
+bash healthcheck.sh
+bash setup-test-data.sh
+bash create-pat.sh
+```
+
+`create-pat.sh` prints `export` commands for `JIRA_PERSONAL_TOKEN` and
+`CONFLUENCE_PERSONAL_TOKEN`; it does not write them to `.env`. Copy and run the
+printed exports in your current shell, or save them in a local secrets file and
+source that file before running the diagnostic.
+
+Start the MCP HTTP server from the repository root in a separate terminal. Do
+not set `JIRA_PERSONAL_TOKEN` or `CONFLUENCE_PERSONAL_TOKEN` for this diagnostic;
+the script supplies those values through headers.
+
+```bash
+uv run mcp-atlassian --transport streamable-http --port 9000 -vv
+```
+
+If the MCP server runs in the same Docker network as Jira/Confluence and the
+diagnostic passes Docker DNS names such as `http://jira:8080`, allowlist those
+hostnames for SSRF validation:
+
+```bash
+MCP_ALLOWED_URL_DOMAINS=jira,confluence \
+  uv run mcp-atlassian --transport streamable-http --port 9000 -vv
+```
+
+Run the diagnostic client:
+
+```bash
+cd tests/e2e/docker
+source .env
+# Paste/run the export commands printed by create-pat.sh here,
+# or source your local secrets file that contains them.
+uv run python diagnose-mcp-header-auth.py \
+  --mcp-url http://localhost:9000/mcp \
+  --jira-url "$JIRA_BASE_URL" \
+  --confluence-url "$CONFLUENCE_BASE_URL"
+```
+
+The `--jira-url` and `--confluence-url` values are copied into
+`X-Atlassian-Jira-Url` and `X-Atlassian-Confluence-Url` headers by the
+diagnostic client. They are not MCP server defaults.
+
+For a fully containerized run, use URLs that are reachable from the MCP
+container, not necessarily from the host:
+
+```bash
+uv run python diagnose-mcp-header-auth.py \
+  --mcp-url http://localhost:9000/mcp \
+  --jira-url http://jira:8080 \
+  --confluence-url http://confluence:8090
+```
+
+The diagnostic reads `JIRA_PERSONAL_TOKEN` and
+`CONFLUENCE_PERSONAL_TOKEN` from the environment. Avoid passing PATs as
+command-line arguments because they can be exposed through process listings.
+
+The report shows health check status, visible Jira/Confluence tools, and the
+result of low-risk read-only calls. If a user's PAT has restricted permissions,
+Jira or Confluence should return permission errors under that user's identity.
+
 ## Setup wizard (manual, one-time)
 
 Both Jira and Confluence require completing a setup wizard on first launch.
@@ -84,6 +158,10 @@ docker compose down -v
 | DB connection error | Ensure the DB container is healthy: `docker compose ps` |
 | Setup wizard reappears | Data volumes were removed — run `docker compose down` (without `-v`) to preserve them |
 | License expired | See [License (timebomb)](#license-timebomb) — Jira: re-paste in admin; Confluence: `down -v` re-setup or `ATL_FORCE_CFG_UPDATE=true docker compose up -d confluence` (a plain restart does **not** refresh it) |
+| MCP `/healthz` fails | Ensure `uv run mcp-atlassian --transport streamable-http --port 9000 -vv` is running from the repository root |
+| Jira/Confluence tools are not visible | Confirm the diagnostic command passes both URL and PAT headers for that service |
+| Invalid URL error | The MCP server rejected the supplied URL with SSRF validation; use a routable Jira/Confluence base URL, or set `MCP_ALLOWED_URL_DOMAINS` for trusted Docker DNS hostnames |
+| Tool call returns 401/403 | The supplied PAT is invalid, expired, or lacks permission for that Jira/Confluence action |
 
 ## Environment variables
 

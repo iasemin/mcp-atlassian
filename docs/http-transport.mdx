@@ -106,23 +106,46 @@ Both transport types support per-request authentication where each user provides
     }
     ```
   </Tab>
-  <Tab title="Server/DC (PAT)">
+  <Tab title="Server/DC (PAT headers)">
     ```json
     {
       "mcpServers": {
         "mcp-atlassian-service": {
           "url": "http://localhost:9000/mcp",
           "headers": {
-            "Authorization": "Token <USER_PERSONAL_ACCESS_TOKEN>"
+            "X-Atlassian-Jira-Url": "<USER_JIRA_BASE_URL>",
+            "X-Atlassian-Jira-Personal-Token": "<USER_JIRA_PAT>",
+            "X-Atlassian-Confluence-Url": "<USER_CONFLUENCE_BASE_URL>",
+            "X-Atlassian-Confluence-Personal-Token": "<USER_CONFLUENCE_PAT>"
           }
         }
       }
     }
     ```
+
+    Send only the Jira headers when the user should access Jira only, only the
+    Confluence headers when the user should access Confluence only, or all four
+    headers when both services should be available. The Atlassian URL headers are
+    request-scoped too: the server uses the URL supplied in the same request as
+    the PAT, not a shared Jira/Confluence default. The MCP server does not store
+    these PATs; Jira and Confluence enforce permissions for the supplied user.
   </Tab>
 </Tabs>
 
 ### Server Setup for Multi-User
+
+For Server/Data Center PAT multi-user mode, the HTTP server can be started
+without `JIRA_URL`, `CONFLUENCE_URL`, `JIRA_PERSONAL_TOKEN`, or
+`CONFLUENCE_PERSONAL_TOKEN`. Each request must provide a complete service header
+pair:
+
+```bash
+uvx mcp-atlassian --transport streamable-http --port 9000 -vv
+```
+
+The server treats `X-Atlassian-Jira-Url` + `X-Atlassian-Jira-Personal-Token`
+and `X-Atlassian-Confluence-Url` +
+`X-Atlassian-Confluence-Personal-Token` as request-scoped credentials.
 
 <Steps>
   <Step title="Run OAuth Setup (if using OAuth)">
@@ -195,8 +218,7 @@ For multi-tenant applications where each user connects to their own Atlassian cl
    ```
 
 2. Users provide authentication via HTTP headers:
-   - `Authorization: Bearer <user_oauth_token>`
-   - `X-Atlassian-Cloud-Id: <user_cloud_id>`
+   - Cloud OAuth: `Authorization: Bearer <user_oauth_token>` plus `X-Atlassian-Cloud-Id: <user_cloud_id>`
 
 ### Python Example
 

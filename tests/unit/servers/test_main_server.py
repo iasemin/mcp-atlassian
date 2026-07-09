@@ -318,6 +318,136 @@ class TestUserTokenMiddleware:
         middleware.app.assert_not_called()
 
     @pytest.mark.anyio
+    async def test_complete_jira_service_headers_set_pat_context(
+        self, middleware, mock_scope, mock_receive, mock_send
+    ):
+        """Complete Jira URL/PAT headers establish header-based PAT auth."""
+        jira_token = b"jira-user-pat-secret"
+        mock_scope["headers"] = [
+            (b"x-atlassian-jira-url", b"https://jira.example.com"),
+            (b"x-atlassian-jira-personal-token", jira_token),
+        ]
+
+        with patch(
+            "mcp_atlassian.servers.main.validate_url_for_ssrf",
+            return_value=None,
+        ):
+            await middleware(mock_scope, mock_receive, mock_send)
+
+        middleware.app.assert_called_once()
+        downstream_scope = middleware.app.await_args.args[0]
+        state = downstream_scope["state"]
+        assert state["user_atlassian_auth_type"] == "pat"
+        assert "user_atlassian_token" not in state
+        assert state["atlassian_service_headers"] == {
+            "X-Atlassian-Jira-Url": "https://jira.example.com",
+            "X-Atlassian-Jira-Personal-Token": "jira-user-pat-secret",
+        }
+
+    @pytest.mark.anyio
+    async def test_complete_confluence_service_headers_set_pat_context(
+        self, middleware, mock_scope, mock_receive, mock_send
+    ):
+        """Complete Confluence URL/PAT headers establish header-based PAT auth."""
+        mock_scope["headers"] = [
+            (b"x-atlassian-confluence-url", b"https://confluence.example.com"),
+            (
+                b"x-atlassian-confluence-personal-token",
+                b"confluence-user-pat-secret",
+            ),
+        ]
+
+        with patch(
+            "mcp_atlassian.servers.main.validate_url_for_ssrf",
+            return_value=None,
+        ):
+            await middleware(mock_scope, mock_receive, mock_send)
+
+        middleware.app.assert_called_once()
+        downstream_scope = middleware.app.await_args.args[0]
+        state = downstream_scope["state"]
+        assert state["user_atlassian_auth_type"] == "pat"
+        assert "user_atlassian_token" not in state
+        assert state["atlassian_service_headers"] == {
+            "X-Atlassian-Confluence-Url": "https://confluence.example.com",
+            "X-Atlassian-Confluence-Personal-Token": "confluence-user-pat-secret",
+        }
+
+    @pytest.mark.anyio
+    async def test_service_headers_take_precedence_over_authorization_for_atlassian_auth(  # noqa: E501
+        self, middleware, mock_scope, mock_receive, mock_send
+    ):
+        """A gateway Authorization header must not override X-Atlassian PAT auth."""
+        mock_scope["headers"] = [
+            (b"authorization", b"Bearer gateway-or-mcp-token"),
+            (b"x-atlassian-jira-url", b"https://jira.example.com"),
+            (b"x-atlassian-jira-personal-token", b"jira-user-pat-secret"),
+        ]
+
+        with patch(
+            "mcp_atlassian.servers.main.validate_url_for_ssrf",
+            return_value=None,
+        ):
+            await middleware(mock_scope, mock_receive, mock_send)
+
+        middleware.app.assert_called_once()
+        downstream_scope = middleware.app.await_args.args[0]
+        state = downstream_scope["state"]
+        assert state["user_atlassian_auth_type"] == "pat"
+        assert "user_atlassian_token" not in state
+        assert (
+            state["atlassian_service_headers"]["X-Atlassian-Jira-Personal-Token"]
+            == "jira-user-pat-secret"
+        )
+
+    @pytest.mark.anyio
+    async def test_incomplete_service_headers_do_not_set_pat_context(
+        self, middleware, mock_scope, mock_receive, mock_send
+    ):
+        """A lone service URL or PAT header is captured but does not authenticate."""
+        mock_scope["headers"] = [
+            (b"x-atlassian-jira-url", b"https://jira.example.com"),
+        ]
+
+        with patch(
+            "mcp_atlassian.servers.main.validate_url_for_ssrf",
+            return_value=None,
+        ):
+            await middleware(mock_scope, mock_receive, mock_send)
+
+        middleware.app.assert_called_once()
+        downstream_scope = middleware.app.await_args.args[0]
+        state = downstream_scope["state"]
+        assert "user_atlassian_auth_type" not in state
+        assert "user_atlassian_token" not in state
+        assert state["atlassian_service_headers"] == {
+            "X-Atlassian-Jira-Url": "https://jira.example.com",
+        }
+
+    @pytest.mark.anyio
+    async def test_service_header_pat_value_is_not_logged(
+        self, middleware, mock_scope, mock_receive, mock_send, caplog
+    ):
+        """Header PAT values must not appear in middleware logs."""
+        secret = "jira-user-pat-secret"
+        mock_scope["headers"] = [
+            (b"x-atlassian-jira-url", b"https://jira.example.com"),
+            (b"x-atlassian-jira-personal-token", secret.encode("utf-8")),
+        ]
+
+        with (
+            patch(
+                "mcp_atlassian.servers.main.validate_url_for_ssrf",
+                return_value=None,
+            ),
+            caplog.at_level(logging.DEBUG, logger="mcp-atlassian.server.main"),
+        ):
+            await middleware(mock_scope, mock_receive, mock_send)
+
+        assert secret not in caplog.text
+        assert "X-Atlassian-Jira-Personal-Token" in caplog.text
+
+    @pytest.mark.anyio
     async def test_client_disconnect_connection_reset(
         self, middleware, mock_scope, mock_receive
     ):
