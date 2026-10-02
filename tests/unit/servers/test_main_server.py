@@ -135,6 +135,55 @@ async def test_oauth_mcp_discovery_and_call_boundaries() -> None:
 
 
 @pytest.mark.anyio
+async def test_oauth_mcp_tool_list_ignores_invalid_jira_pat_in_session() -> None:
+    with patch.object(main_mcp, "auth", TokenVerifier()):
+        app = main_mcp.http_app(json_response=True)
+
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+        "MCP-Protocol-Version": "2025-03-26",
+    }
+    transport = httpx.ASGITransport(app=app)
+    with patch.dict(os.environ, {"MCP_ALLOWED_URL_DOMAINS": "jira.sberned.ru"}):
+        async with app.lifespan(app):
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                initialize = await client.post(
+                    "/mcp",
+                    headers=headers,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2025-03-26",
+                            "capabilities": {},
+                            "clientInfo": {"name": "litellm-test", "version": "1.0"},
+                        },
+                    },
+                )
+                session_id = initialize.headers["Mcp-Session-Id"]
+                tools = await client.post(
+                    "/mcp",
+                    headers={
+                        **headers,
+                        "Mcp-Session-Id": session_id,
+                        "X-Atlassian-Jira-Url": "https://jira.sberned.ru",
+                        "X-Atlassian-Jira-Personal-Token": "invalid-test-token",
+                    },
+                    json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+                )
+
+    assert initialize.status_code == 200
+    assert tools.status_code == 200
+    names = {tool["name"] for tool in tools.json()["result"]["tools"]}
+    assert any(name.startswith("jira_") for name in names)
+    assert not any(name.startswith("confluence_") for name in names)
+
+
+@pytest.mark.anyio
 async def test_run_server_stdio():
     """Test that main_mcp.run_async is called with stdio transport."""
     with patch.object(main_mcp, "run_async") as mock_run_async:
