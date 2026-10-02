@@ -255,11 +255,7 @@ class AtlassianMCP(FastMCP[MainAppContext]):
                 logger.debug(
                     f"Header-based service availability: {header_based_services}"
                 )
-        public_catalog = bool(
-            request is not None
-            and getattr(request.state, "public_tool_discovery", False)
-            and not service_headers
-        )
+        public_catalog = request is not None and not service_headers
         jira_header_incomplete = _has_incomplete_service_header_pair(
             service_headers,
             "X-Atlassian-Jira-Url",
@@ -494,8 +490,6 @@ class MCPDiscoveryAuthMiddleware:
             and isinstance(request.get("method"), str)
             and request["method"] in MCP_DISCOVERY_METHODS
         ):
-            if request["method"] == "tools/list":
-                scope.setdefault("state", {})["public_tool_discovery"] = True
             await self.public_app(scope, replay_body, send)
         else:
             await self.protected_app(scope, replay_body, send)

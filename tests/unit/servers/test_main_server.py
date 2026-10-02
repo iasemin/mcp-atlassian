@@ -74,6 +74,49 @@ def test_oauth_mcp_route_uses_discovery_gate() -> None:
 
 
 @pytest.mark.anyio
+async def test_http_mcp_lists_tools_without_oauth_or_atlassian_headers() -> None:
+    with patch.object(main_mcp, "auth", None):
+        app = main_mcp.http_app(stateless_http=True, json_response=True)
+
+    transport = httpx.ASGITransport(app=app)
+    async with app.lifespan(app):
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            tools = await client.post(
+                "/mcp",
+                headers={
+                    "Accept": "application/json, text/event-stream",
+                    "Content-Type": "application/json",
+                },
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            )
+            call = await client.post(
+                "/mcp",
+                headers={
+                    "Accept": "application/json, text/event-stream",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "jira_get_user_profile",
+                        "arguments": {"user_identifier": "admin"},
+                    },
+                },
+            )
+
+    assert tools.status_code == 200
+    names = {tool["name"] for tool in tools.json()["result"]["tools"]}
+    assert any(name.startswith("jira_") for name in names)
+    assert any(name.startswith("confluence_") for name in names)
+    assert call.status_code == 200
+    assert call.json()["result"]["isError"] is True
+
+
+@pytest.mark.anyio
 async def test_oauth_mcp_discovery_and_call_boundaries() -> None:
     with patch.object(main_mcp, "auth", TokenVerifier()):
         app = main_mcp.http_app(stateless_http=True, json_response=True)
