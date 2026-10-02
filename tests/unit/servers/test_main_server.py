@@ -7,8 +7,180 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from fastmcp.server.auth.auth import TokenVerifier
 
-from mcp_atlassian.servers.main import UserTokenMiddleware, main_mcp
+from mcp_atlassian.servers.main import (
+    MCPDiscoveryAuthMiddleware,
+    UserTokenMiddleware,
+    main_mcp,
+)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "method",
+    ["initialize", "notifications/initialized", "tools/list"],
+)
+async def test_mcp_discovery_without_oauth_replays_body(method: str) -> None:
+    protected = AsyncMock()
+    public = AsyncMock()
+    middleware = MCPDiscoveryAuthMiddleware(protected, public)
+    payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method}).encode()
+    receive = AsyncMock(
+        side_effect=[
+            {"type": "http.request", "body": payload[:10], "more_body": True},
+            {"type": "http.request", "body": payload[10:], "more_body": False},
+        ]
+    )
+    send = AsyncMock()
+
+    await middleware({"type": "http", "method": "POST"}, receive, send)
+
+    protected.assert_not_called()
+    public.assert_awaited_once()
+    replay = public.await_args.args[1]
+    assert await replay() == {"type": "http.request", "body": payload}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call"},
+        [{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}],
+        {"jsonrpc": "2.0", "id": 2, "method": "resources/list"},
+    ],
+)
+async def test_other_mcp_methods_stay_protected(payload: object) -> None:
+    protected = AsyncMock()
+    public = AsyncMock()
+    middleware = MCPDiscoveryAuthMiddleware(protected, public)
+    receive = AsyncMock(
+        return_value={"type": "http.request", "body": json.dumps(payload).encode()}
+    )
+
+    await middleware({"type": "http", "method": "POST"}, receive, AsyncMock())
+
+    protected.assert_awaited_once()
+    public.assert_not_called()
+
+
+def test_oauth_mcp_route_uses_discovery_gate() -> None:
+    with patch.object(main_mcp, "auth", TokenVerifier()):
+        app = main_mcp.http_app()
+
+    route = next(route for route in app.routes if route.path == "/mcp")
+    assert isinstance(route.app, MCPDiscoveryAuthMiddleware)
+
+
+@pytest.mark.anyio
+async def test_oauth_mcp_discovery_and_call_boundaries() -> None:
+    with patch.object(main_mcp, "auth", TokenVerifier()):
+        app = main_mcp.http_app(stateless_http=True, json_response=True)
+
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+        "MCP-Protocol-Version": "2025-03-26",
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with app.lifespan(app):
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            initialize = await client.post(
+                "/mcp",
+                headers=headers,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-03-26",
+                        "capabilities": {},
+                        "clientInfo": {"name": "litellm-test", "version": "1.0"},
+                    },
+                },
+            )
+            tools = await client.post(
+                "/mcp",
+                headers=headers,
+                json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            )
+            call = await client.post(
+                "/mcp",
+                headers=headers,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {"name": "jira_get_issue", "arguments": {}},
+                },
+            )
+            resources = await client.post(
+                "/mcp",
+                headers=headers,
+                json={"jsonrpc": "2.0", "id": 4, "method": "resources/list"},
+            )
+            stream = await client.get("/mcp", headers=headers)
+
+    assert initialize.status_code == 200
+    assert tools.status_code == 200
+    names = {tool["name"] for tool in tools.json()["result"]["tools"]}
+    assert any(name.startswith("jira_") for name in names)
+    assert any(name.startswith("confluence_") for name in names)
+    assert call.status_code == 401
+    assert resources.status_code == 401
+    assert stream.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_oauth_mcp_tool_list_ignores_invalid_jira_pat_in_session() -> None:
+    with patch.object(main_mcp, "auth", TokenVerifier()):
+        app = main_mcp.http_app(json_response=True)
+
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+        "MCP-Protocol-Version": "2025-03-26",
+    }
+    transport = httpx.ASGITransport(app=app)
+    with patch.dict(os.environ, {"MCP_ALLOWED_URL_DOMAINS": "jira.sberned.ru"}):
+        async with app.lifespan(app):
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                initialize = await client.post(
+                    "/mcp",
+                    headers=headers,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2025-03-26",
+                            "capabilities": {},
+                            "clientInfo": {"name": "litellm-test", "version": "1.0"},
+                        },
+                    },
+                )
+                session_id = initialize.headers["Mcp-Session-Id"]
+                tools = await client.post(
+                    "/mcp",
+                    headers={
+                        **headers,
+                        "Mcp-Session-Id": session_id,
+                        "X-Atlassian-Jira-Url": "https://jira.sberned.ru",
+                        "X-Atlassian-Jira-Personal-Token": "invalid-test-token",
+                    },
+                    json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+                )
+
+    assert initialize.status_code == 200
+    assert tools.status_code == 200
+    names = {tool["name"] for tool in tools.json()["result"]["tools"]}
+    assert any(name.startswith("jira_") for name in names)
+    assert not any(name.startswith("confluence_") for name in names)
 
 
 @pytest.mark.anyio
