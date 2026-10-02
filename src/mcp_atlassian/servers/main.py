@@ -12,13 +12,16 @@ from urllib.parse import urlparse
 from cachetools import TTLCache
 from fastmcp import FastMCP
 from fastmcp import settings as fastmcp_settings
+from fastmcp.server.auth.middleware import RequireAuthMiddleware
 from fastmcp.server.event_store import EventStore
 from fastmcp.server.http import StarletteWithLifespan
 from fastmcp.tools import Tool as FastMCPTool
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.types import Tool as MCPTool
 from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from mcp_atlassian.confluence import ConfluenceFetcher
@@ -60,6 +63,8 @@ DEFAULT_ALLOWED_REDIRECT_URIS = [
 ]
 DEFAULT_ALLOWED_GRANT_TYPES = ["authorization_code", "refresh_token"]
 OAUTH_PROXY_ENABLE_ENV = "ATLASSIAN_OAUTH_PROXY_ENABLE"
+MCP_DISCOVERY_METHODS = {"initialize", "notifications/initialized", "tools/list"}
+MAX_DISCOVERY_BODY_BYTES = 1_048_576
 
 
 def _sanitize_schema_for_compatibility(tool: MCPTool) -> MCPTool:
@@ -250,6 +255,11 @@ class AtlassianMCP(FastMCP[MainAppContext]):
                 logger.debug(
                     f"Header-based service availability: {header_based_services}"
                 )
+        public_catalog = bool(
+            request is not None
+            and getattr(request.state, "public_tool_discovery", False)
+            and not service_headers
+        )
         jira_header_incomplete = _has_incomplete_service_header_pair(
             service_headers,
             "X-Atlassian-Jira-Url",
@@ -299,15 +309,19 @@ class AtlassianMCP(FastMCP[MainAppContext]):
                     jira_available = False
                 else:
                     jira_available = (
-                        app_lifespan_state.full_jira_config is not None
-                    ) or header_based_services.get("jira", False)
+                        (app_lifespan_state.full_jira_config is not None)
+                        or header_based_services.get("jira", False)
+                        or public_catalog
+                    )
 
                 if confluence_header_incomplete:
                     confluence_available = False
                 else:
                     confluence_available = (
-                        app_lifespan_state.full_confluence_config is not None
-                    ) or header_based_services.get("confluence", False)
+                        (app_lifespan_state.full_confluence_config is not None)
+                        or header_based_services.get("confluence", False)
+                        or public_catalog
+                    )
 
                 if is_jira_tool and not jira_available:
                     logger.debug(
@@ -320,8 +334,12 @@ class AtlassianMCP(FastMCP[MainAppContext]):
                     )
                     service_configured_and_available = False
             elif is_jira_tool or is_confluence_tool:
-                jira_available = header_based_services.get("jira", False)
-                confluence_available = header_based_services.get("confluence", False)
+                jira_available = (
+                    header_based_services.get("jira", False) or public_catalog
+                )
+                confluence_available = (
+                    header_based_services.get("confluence", False) or public_catalog
+                )
 
                 if is_jira_tool and not jira_available:
                     logger.debug(
@@ -375,6 +393,17 @@ class AtlassianMCP(FastMCP[MainAppContext]):
             event_store=event_store,
             retry_interval=retry_interval,
         )
+        if transport == "streamable-http" and self.auth:
+            for route in app.routes:
+                if (
+                    isinstance(route, Route)
+                    and route.path == final_path
+                    and isinstance(route.endpoint, RequireAuthMiddleware)
+                ):
+                    route.app = MCPDiscoveryAuthMiddleware(
+                        route.app, route.endpoint.app
+                    )
+                    break
         return app
 
 
@@ -414,6 +443,62 @@ def _has_any_complete_service_header_pair(service_headers: dict[str, str]) -> bo
         "X-Atlassian-Confluence-Url",
         "X-Atlassian-Confluence-Personal-Token",
     )
+
+
+class MCPDiscoveryAuthMiddleware:
+    """Allow unauthenticated MCP discovery while retaining OAuth on other calls."""
+
+    def __init__(self, protected_app: ASGIApp, public_app: ASGIApp) -> None:
+        self.protected_app = protected_app
+        self.public_app = public_app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] != "http"
+            or scope.get("method") != "POST"
+            or isinstance(scope.get("user"), AuthenticatedUser)
+        ):
+            await self.protected_app(scope, receive, send)
+            return
+
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                await self.protected_app(scope, receive, send)
+                return
+            body.extend(message.get("body", b""))
+            if len(body) > MAX_DISCOVERY_BODY_BYTES:
+                await self.protected_app(scope, receive, send)
+                return
+            if not message.get("more_body", False):
+                break
+
+        body_replayed = False
+
+        async def replay_body() -> Message:
+            nonlocal body_replayed
+            if body_replayed:
+                return await receive()
+            body_replayed = True
+            return {"type": "http.request", "body": bytes(body)}
+
+        try:
+            request = json.loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            request = None
+
+        if (
+            isinstance(request, dict)
+            and request.get("jsonrpc") == "2.0"
+            and isinstance(request.get("method"), str)
+            and request["method"] in MCP_DISCOVERY_METHODS
+        ):
+            if request["method"] == "tools/list":
+                scope.setdefault("state", {})["public_tool_discovery"] = True
+            await self.public_app(scope, replay_body, send)
+        else:
+            await self.protected_app(scope, replay_body, send)
 
 
 class UserTokenMiddleware:
