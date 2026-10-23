@@ -58,6 +58,9 @@ See the `values.yaml` file for all configuration options.
 
 - **authMode**: `api-token`, `personal-token`, `oauth`, or `byot`
 - **transport**: `stdio`, `sse`, or `streamable-http`
+- **stateless**: defaults to `true` for `streamable-http`; set to `false` only if
+  clients require stateful MCP sessions and the deployment routes each session
+  to the same pod. This setting does not affect `stdio` or `sse`.
 - **confluence/jira.enabled**: Enable/disable Confluence or Jira integration
 - **config.readOnlyMode**: Disable all write operations
 - **persistence.enabled**: Enable OAuth token persistence

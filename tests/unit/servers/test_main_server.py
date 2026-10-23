@@ -117,6 +117,58 @@ async def test_http_mcp_lists_tools_without_oauth_or_atlassian_headers() -> None
 
 
 @pytest.mark.anyio
+async def test_closed_http_session_rejects_later_notification() -> None:
+    with patch.object(main_mcp, "auth", None):
+        app = main_mcp.http_app(stateless_http=False, json_response=True)
+
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+        "MCP-Protocol-Version": "2025-03-26",
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with app.lifespan(app):
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            initialized = await client.post(
+                "/mcp",
+                headers=headers,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-03-26",
+                        "capabilities": {},
+                        "clientInfo": {"name": "stale-session-test", "version": "1.0"},
+                    },
+                },
+            )
+            session_headers = {
+                **headers,
+                "Mcp-Session-Id": initialized.headers["Mcp-Session-Id"],
+            }
+            terminated = await client.delete("/mcp", headers=session_headers)
+            session_manager = next(
+                route.endpoint.session_manager
+                for route in app.routes
+                if route.path == "/mcp"
+            )
+            retained_sessions = len(session_manager._server_instances)
+            stale = await client.post(
+                "/mcp",
+                headers=session_headers,
+                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            )
+
+    assert initialized.status_code == 200
+    assert terminated.status_code == 200
+    assert retained_sessions == 0
+    assert stale.status_code == 404
+
+
+@pytest.mark.anyio
 async def test_oauth_mcp_discovery_and_call_boundaries() -> None:
     with patch.object(main_mcp, "auth", TokenVerifier()):
         app = main_mcp.http_app(stateless_http=True, json_response=True)
