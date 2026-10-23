@@ -50,6 +50,9 @@ spec:
         - {{ .Values.transport }}
         - --port
         - "{{ .Values.port }}"
+        {{- if and (eq .Values.transport "streamable-http") .Values.stateless }}
+        - --stateless
+        {{- end }}
         {{- end }}
         {{- if .Values.config.verbose }}
         - -v

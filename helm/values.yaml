@@ -16,6 +16,9 @@ fullnameOverride: ""
 # For HTTP modes, service will be created automatically
 transport: "stdio"
 
+# Avoid pod-local MCP sessions for Streamable HTTP. Has no effect on stdio/SSE.
+stateless: true
+
 # Port for HTTP transport modes (sse or streamable-http)
 port: 9000
 
